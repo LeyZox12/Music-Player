@@ -1,12 +1,15 @@
-﻿using SFML;
+﻿using DiscordRPC;
+using DiscordRPC.Logging;
+using SFML;
+using SFML.Audio;
 using SFML.Graphics;
 using SFML.System;
-using SFML.Audio;
 using SFML.Window;
 using System.Diagnostics;
 using System.IO;
-using TagLib;
+using System.Runtime.CompilerServices;
 using System.Security.AccessControl;
+using TagLib;
 
 
 /// TO DO GET SONGS METADATA AND ADD COVER TO ALBUMS
@@ -18,14 +21,18 @@ namespace music_player_core
     {
         static SimpleWindow window = new SimpleWindow();
         static Font font = new Font("res\\font.otf");
-        const String path = "C:\\Users\\solat\\Music";
+        const String songsPath = "C:\\Users\\solat\\Music";
         const int size = 200;
         const int spacing = 5;
         const int fontSize = 30;
         static string currentArtist = "None";
         static string currentAlbum = "None";
         static string currentSong = "None";
+        static bool paused = false;
         static Music currentMusic;
+        static int repeatMode = 0;
+        static int currentFrame = 0;
+
         private static void PlaySong(string path)
         {
             if(currentMusic != null) currentMusic.Stop();
@@ -38,9 +45,49 @@ namespace music_player_core
                 new CircleShape(15) { FillColor = Color.White, Position = (412, 412) },
                 0.5f));
             window.sliders.Add(new Slider(
-                new RectangleShape((400, 5)) { FillColor = Color.White, Position = (56, 450) },
+                new RectangleShape((400, 5)) { FillColor = Color.White, Position = (56, 430) },
                 new CircleShape(15) { FillColor = Color.White, Position = (412, 412) },
                 0.0f));
+            window.buttons.Add(new Button(
+               new RectangleShape((60, 60))
+               {
+                   Position = (256-30, 450),
+                   Texture = new Texture("res/pause.png")
+               },
+               new Text()
+               {
+
+               },
+               () => { paused = !paused; if (paused) currentMusic.Pause(); else currentMusic.Play(); window.buttons[0].Sprite.Texture = new Texture(paused ? "res/play.png" : "res/pause.png"); }));
+            window.buttons.Add(new Button(
+               new RectangleShape((60, 60))
+               {
+                   Position = (0, 450),
+                   Texture = new Texture($"res/loop({repeatMode}).png")
+               },
+               new Text()
+               {
+
+               },
+               () => 
+               {
+                   repeatMode = (repeatMode + 1) % 3;
+                   window.buttons[1].Sprite.Texture = new Texture($"res/loop({repeatMode}).png");
+               }));
+
+            window.buttons.Add(new Button(
+               new RectangleShape((300, 300))
+               {
+                   Position = (100, 100),
+                   Texture = new Texture("covers/" + currentAlbum + ".jpg")
+               },
+               new Text()
+               {
+
+               },
+               () => {}));
+            currentSong = path.Substring((songsPath+$"\\{currentArtist}\\{currentAlbum}").Length+1);
+            window.UpdateRPC(currentArtist, currentAlbum, currentSong, currentMusic.PlayingOffset, currentMusic.Duration);
         }
         private static void LoadSongUI()
         {
@@ -156,11 +203,11 @@ namespace music_player_core
         {
             window.buttons.Clear();
             Console.WriteLine("Scanning local 'music' folder");
-            var artists = Directory.EnumerateDirectories(path);
+            var artists = Directory.EnumerateDirectories(songsPath);
             var i = 0;
             foreach (var artist in artists)
             {
-                var fixedArtist = artist.Substring(path.Length+1);
+                var fixedArtist = artist.Substring(songsPath.Length+1);
                 Console.WriteLine(fixedArtist);
                 window.buttons.Add(new Button(
                     new RectangleShape((fixedArtist.Length * fontSize * 0.75f, fontSize * 1.5f))
@@ -184,6 +231,28 @@ namespace music_player_core
             }
             Thread.Sleep(1000);
         }
+        private static void NextSong(bool shouldLoop)
+        {
+            var albumPath = songsPath + $"\\{currentArtist}\\{currentAlbum}";
+            var songs = Directory.EnumerateFiles(albumPath);
+            currentMusic.Stop();
+            for (int i = 1; i < songs.Count()-1; i++)
+            {
+                if (songs.ElementAt(i - 1).Contains(currentSong))
+                {
+                    currentMusic = new Music(songs.ElementAt(i));
+                    currentMusic.Play();
+                    currentSong = songs.ElementAt(i).Substring(albumPath.Length + 1);
+                    break;
+                }
+            }
+            if(songs.ElementAt(songs.Count() - 1).Contains(currentSong))
+            {
+                currentMusic = new Music(songs.ElementAt(0));
+                currentMusic.Play();
+                currentSong = songs.ElementAt(0).Substring(albumPath.Length + 1);
+            }
+        }
         private static void Main()
         {
 
@@ -191,7 +260,6 @@ namespace music_player_core
             {
                 FillColor = Color.White
             };
-            
             var running = true;
             var setPathButton = new Button(
                 new RectangleShape((110, 50)), 
@@ -202,9 +270,28 @@ namespace music_player_core
                 }
                 );
             window.start();
+            
             window.buttons.Add(setPathButton);
             while(running)
             {
+                if(currentMusic != null && currentMusic.Status == SoundStatus.Stopped)
+                {
+                    Console.WriteLine(repeatMode);
+                    switch(repeatMode)
+                    {
+                        case 0:
+                            NextSong(false);
+                            break;
+                        case 1:
+                            currentMusic.PlayingOffset = Time.Zero;
+                            currentMusic.Play();
+                            break;
+                        case 2:
+                            NextSong(true);
+                            break;
+                    }
+                    window.UpdateRPC(currentArtist, currentAlbum, currentSong, currentMusic.PlayingOffset, currentMusic.Duration);
+                }
                 float buffer = 0;
                 if (window.sliders.Count > 0)
                     buffer = window.sliders[1].value;
@@ -276,14 +363,114 @@ namespace music_player_core
         public List<Button> buttons = new List<Button>();
         public List<Slider> sliders = new List<Slider>();
         static RenderWindow window = new RenderWindow(new VideoMode(512, 512), "Music Player");
+        static DiscordRpcClient client;
         static bool holding = false;
         const float SCROLL_SPEED = 40.0f;
+        private void InitDiscordRPC()
+        {
+            /*
+            Create a Discord client
+            NOTE: 	If you are using Unity3D, you must use the full constructor and define
+                     the pipe connection.
+            */
+
+            {
+                /*
+                Create a Discord client
+                NOTE: 	If you are using Unity3D, you must use the full constructor and define
+                         the pipe connection.
+                */
+                client = new DiscordRpcClient("1383726518319976558");
+
+                //Set the logger
+                client.Logger = new ConsoleLogger() { Level = LogLevel.Warning };
+
+                //Subscribe to events
+                client.OnReady += (sender, e) =>
+                {
+                    Console.WriteLine("Received Ready from user {0}", e.User.Username);
+                };
+
+                client.OnPresenceUpdate += (sender, e) =>
+                {
+                    Console.WriteLine("Received Update! {0}", e.Presence);
+                };
+
+                //Connect to the RPC
+                client.Initialize();
+
+                //Set the rich presence
+                //Call this as many times as you want and anywhere in your code.
+                client.SetPresence(new RichPresence()
+                {
+                    Details = "Browsing music",
+                    State = "...",
+                    Assets = new Assets()
+                    {
+                        LargeImageKey = "image_large",
+                        LargeImageText = "Lachee's Discord IPC Library",
+                        SmallImageKey = "image_small"
+                    }
+                });
+            }
+            ;
+
+            //Set the logger
+            client.Logger = new ConsoleLogger() { Level = LogLevel.Warning };
+
+            //Subscribe to events
+            client.OnReady += (sender, e) =>
+            {
+                Console.WriteLine("Received Ready from user {0}", e.User.Username);
+            };
+
+            client.OnPresenceUpdate += (sender, e) =>
+            {
+                Console.WriteLine("Received Update! {0}", e.Presence);
+            };
+
+            //Connect to the RPC
+
+
+            //Set the rich presence
+            //Call this as many times as you want and anywhere in your code.
+            client.SetPresence(new RichPresence()
+            {
+                Details = "Example Project",
+                State = "csharp example",
+                Assets = new Assets()
+                {
+                    LargeImageKey = "image_large",
+                    LargeImageText = "Lachee's Discord IPC Library",
+                    SmallImageKey = "image_small"
+                }
+            });
+        }
+        public void UpdateRPC(string currentArtist, string currentAlbum, string currentSong, Time offset, Time duration)
+        {
+            var songStart = DateTime.Now.AddMilliseconds(-offset.AsMilliseconds());
+            var songEnd = DateTime.Now.AddMilliseconds( duration.AsMilliseconds());
+            client.SetPresence(new RichPresence()
+            {
+                Details = "Listening to Music",
+                State = $"{currentSong}\nFrom {currentAlbum} \nBy {currentArtist}",
+                Timestamps = new Timestamps(songStart, songEnd.AddSeconds(12)),
+                Assets = new Assets()
+                {
+                    LargeImageKey = "image_large",
+                    LargeImageText = "Lachee's Discord IPC Library",
+                    SmallImageKey = "image_small"
+                }
+            });
+        }
         public void start()
         {
             window.MouseButtonReleased += Window_Release;
             window.MouseWheelScrolled += Window_Scroll;
             window.MouseButtonPressed += Window_Click;
+            window.Closed += Window_Exit;
             window.SetFramerateLimit(30);
+            InitDiscordRPC();
         }
         public void Run()
         {
@@ -349,6 +536,12 @@ namespace music_player_core
                 buttons[i].Sprite.Position += (0, e.Delta * SCROLL_SPEED);
                 buttons[i].Text.Position += (0, e.Delta * SCROLL_SPEED);
             }
+        }
+        private void Window_Exit(object sender, EventArgs e)
+        {
+            window.Close();
+            client.Deinitialize();
+            System.Environment.Exit(0);
         }
     }
 }
