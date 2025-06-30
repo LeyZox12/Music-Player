@@ -11,10 +11,6 @@ using System.Runtime.CompilerServices;
 using System.Security.AccessControl;
 using TagLib;
 
-
-/// TO DO GET SONGS METADATA AND ADD COVER TO ALBUMS
-
-
 namespace music_player_core
 {
     internal static class Program
@@ -45,13 +41,13 @@ namespace music_player_core
                 new CircleShape(15) { FillColor = Color.White, Position = (412, 412) },
                 0.5f));
             window.sliders.Add(new Slider(
-                new RectangleShape((400, 5)) { FillColor = Color.White, Position = (56, 430) },
-                new CircleShape(15) { FillColor = Color.White, Position = (412, 412) },
+                new RectangleShape((400, 40)) { Texture = new Texture("res/slider.png"), Position = (56, 410) },
+                new CircleShape(15) { Texture = new Texture("res/knob.png"), Position = (412, 412) },
                 0.0f));
             window.buttons.Add(new Button(
                new RectangleShape((60, 60))
                {
-                   Position = (256-30, 450),
+                   Position = (226, 450),
                    Texture = new Texture("res/pause.png")
                },
                new Text()
@@ -71,15 +67,43 @@ namespace music_player_core
                },
                () => 
                {
-                   repeatMode = (repeatMode + 1) % 3;
+                   repeatMode = (repeatMode + 1) % 2;
                    window.buttons[1].Sprite.Texture = new Texture($"res/loop({repeatMode}).png");
-               }));
+            }));
+            window.buttons.Add(new Button(
+               new RectangleShape((60, 60))
+               {
+                   Position = (146, 450),
+                   Texture = new Texture($"res/bw.png")
+               },
+               new Text()
+               {
 
+               },
+               () =>
+               {
+                   PreviousSong(true);
+               }));
+            window.buttons.Add(new Button(
+               new RectangleShape((60, 60))
+               {
+                   Position = (296, 450),
+                   Texture = new Texture($"res/fw.png")
+               },
+               new Text()
+               {
+
+               },
+               () =>
+               {
+                   NextSong(true);
+            }));
+            var coverPath = "covers/" + currentAlbum + ".jpg";
             window.buttons.Add(new Button(
                new RectangleShape((300, 300))
                {
-                   Position = (100, 100),
-                   Texture = new Texture("covers/" + currentAlbum + ".jpg")
+                   Position = (50, 100),
+                   Texture = new Texture(System.IO.File.Exists(coverPath) ? coverPath : "covers/failsafe.png")
                },
                new Text()
                {
@@ -246,7 +270,29 @@ namespace music_player_core
                     break;
                 }
             }
-            if(songs.ElementAt(songs.Count() - 1).Contains(currentSong))
+            if(songs.ElementAt(0).Contains(currentSong))
+            {
+                currentMusic = new Music(songs.Last());
+                currentMusic.Play();
+                currentSong = songs.ElementAt(0).Substring(albumPath.Length + 1);
+            }
+        }
+        private static void PreviousSong(bool shouldLoop)
+        {
+            var albumPath = songsPath + $"\\{currentArtist}\\{currentAlbum}";
+            var songs = Directory.EnumerateFiles(albumPath);
+            currentMusic.Stop();
+            for (int i = 0; i < songs.Count() - 1; i++)
+            {
+                if (songs.ElementAt(i + 1).Contains(currentSong))
+                {
+                    currentMusic = new Music(songs.ElementAt(i));
+                    currentMusic.Play();
+                    currentSong = songs.ElementAt(i).Substring(albumPath.Length + 1);
+                    break;
+                }
+            }
+            if (songs.ElementAt(songs.Count() - 1).Contains(currentSong))
             {
                 currentMusic = new Music(songs.ElementAt(0));
                 currentMusic.Play();
@@ -274,23 +320,31 @@ namespace music_player_core
             window.buttons.Add(setPathButton);
             while(running)
             {
-                if(currentMusic != null && currentMusic.Status == SoundStatus.Stopped)
+                if(currentMusic != null)
                 {
-                    Console.WriteLine(repeatMode);
-                    switch(repeatMode)
+                    if (currentMusic.Status == SoundStatus.Stopped)
                     {
-                        case 0:
-                            NextSong(false);
-                            break;
-                        case 1:
-                            currentMusic.PlayingOffset = Time.Zero;
-                            currentMusic.Play();
-                            break;
-                        case 2:
-                            NextSong(true);
-                            break;
+                        Console.WriteLine(repeatMode);
+                        switch (repeatMode)
+                        {
+                            case 0:
+                                NextSong(true);
+                                break;
+                            case 1:
+                                currentMusic.PlayingOffset = Time.Zero;
+                                currentMusic.Play();
+                                break;
+                        }
+                        window.UpdateRPC(currentArtist, currentAlbum, currentSong, currentMusic.PlayingOffset, currentMusic.Duration);
                     }
-                    window.UpdateRPC(currentArtist, currentAlbum, currentSong, currentMusic.PlayingOffset, currentMusic.Duration);
+                    else
+                    {
+                        var flooredOffset = Math.Floor(currentMusic.PlayingOffset.AsSeconds() / 60);
+                        var flooredDuration = Math.Floor(currentMusic.Duration.AsSeconds() / 60);
+                        var timerStr = ($"\n{flooredOffset}:{(Math.Round(currentMusic.PlayingOffset.AsSeconds() - flooredOffset))%60}/{flooredDuration}:{(Math.Round(currentMusic.Duration.AsSeconds() - flooredDuration))%60}");
+                        window.AddToDraw(new Text() { Font = font, DisplayedString = currentSong + timerStr , FillColor = new Color(249, 125, 202) });
+                        window.AddToDraw(new CircleShape(150) { Texture = new Texture("res/kibry_dvd.png"), Position = (350, 250), Origin = (150, 150), Rotation = currentMusic.PlayingOffset.AsSeconds() * 100.0f});
+                    }
                 }
                 float buffer = 0;
                 if (window.sliders.Count > 0)
@@ -327,7 +381,7 @@ namespace music_player_core
         public void SetValue(float val)
         {
             this.value = val;
-            knob.Position = new Vector2f(sprite.Position.X + (sprite.Size.X * value), knob.Position.Y);
+            knob.Position = new Vector2f(sprite.Position.X + (sprite.Size.X * value), sprite.Position.Y + sprite.Size.Y / 2.0f);
         }
         public float UpdateValue(Vector2f mousepos)
         {
@@ -454,13 +508,7 @@ namespace music_player_core
             {
                 Details = "Listening to Music",
                 State = $"{currentSong}\nFrom {currentAlbum} \nBy {currentArtist}",
-                Timestamps = new Timestamps(songStart, songEnd.AddSeconds(12)),
-                Assets = new Assets()
-                {
-                    LargeImageKey = "image_large",
-                    LargeImageText = "Lachee's Discord IPC Library",
-                    SmallImageKey = "image_small"
-                }
+                Timestamps = new Timestamps(songStart, songEnd.AddSeconds(12))
             });
         }
         public void start()
